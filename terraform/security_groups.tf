@@ -60,15 +60,6 @@ resource "aws_vpc_security_group_ingress_rule" "alb_http_from_internet" {
   to_port           = 80
 }
 
-resource "aws_vpc_security_group_ingress_rule" "alb_https_from_internet" {
-  security_group_id = aws_security_group.alb.id
-  description       = "HTTPS from anywhere"
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "tcp"
-  from_port         = 443
-  to_port           = 443
-}
-
 resource "aws_vpc_security_group_egress_rule" "alb_to_app" {
   security_group_id            = aws_security_group.alb.id
   description                  = "Forward requests and health checks to the app"

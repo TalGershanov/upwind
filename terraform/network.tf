@@ -38,9 +38,10 @@ resource "aws_subnet" "public" {
   cidr_block        = var.public_subnet_cidrs[count.index]
   availability_zone = local.azs[count.index]
 
-  # Anything launched here (ALB, NAT, a bastion) gets a public IP, so it can
-  # actually use the Internet Gateway route.
-  map_public_ip_on_launch = true
+  # Nothing here gets a public IP automatically: the ALB gets its own public
+  # addresses and the NAT uses its Elastic IP. Only EC2 instances would be
+  # affected, and we never launch any in the public subnets.
+  map_public_ip_on_launch = false
 
   tags = {
     Name = "${var.project_name}-public-${local.azs[count.index]}"
