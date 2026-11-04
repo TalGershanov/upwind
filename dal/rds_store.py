@@ -11,7 +11,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional, Union
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import OperationalError
@@ -111,6 +111,13 @@ class RDSHistoryStore(HistoryStore):
     def create_schema(self) -> None:
         """Create the tables; run once as a deployment/init step."""
         Base.metadata.create_all(self._engine)
+
+    @_retry_on_auth_failure
+    def ping(self, timeout_ms: int = 2000) -> None:
+        """Cheap liveness check: SELECT 1 with a server-side timeout."""
+        with self._engine.begin() as conn:
+            conn.execute(text(f'SET LOCAL statement_timeout = {int(timeout_ms)}'))
+            conn.execute(text('SELECT 1'))
 
     @_retry_on_auth_failure
     def get_blocklist_entry(self, kind: str,
