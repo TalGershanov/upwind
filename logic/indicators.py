@@ -18,9 +18,7 @@ import unicodedata
 import weakref
 import zipfile
 from dataclasses import dataclass, field
-from email.utils import parseaddr
 from functools import cached_property
-from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Optional
 from urllib.parse import urlsplit
@@ -30,7 +28,7 @@ import eml_parser.decode
 import eml_parser.regexes
 from publicsuffixlist import PublicSuffixList
 
-from logic import config
+from logic import config, email_parser
 from logic.history_store import HistoryStore
 
 logger = logging.getLogger(__name__)
@@ -142,6 +140,12 @@ def _normalize_domain(domain: str) -> str:
     return '.'.join(labels).lower()
 
 
+def _is_internationalized(host: str) -> bool:
+    """Non-ASCII or punycode (``xn--``) host name."""
+    return not host.isascii() or any(
+        label.startswith('xn--') for label in host.split('.'))
+
+
 def _edit_distance(a: str, b: str) -> int:
     """Levenshtein distance."""
     previous = list(range(len(b) + 1))
@@ -164,34 +168,6 @@ def _normalize_text(text: str) -> str:
 _PHRASES = tuple((category, _normalize_text(phrase))
                  for category, phrases in config.SUSPICIOUS_PHRASES.items()
                  for phrase in phrases)
-
-
-class _TextExtractor(HTMLParser):
-    """Collect the visible text of an HTML (or plain text) body."""
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.parts = []
-        self._skip = 0
-
-    def handle_starttag(self, tag, attrs):
-        if tag in ('script', 'style'):
-            self._skip += 1
-
-    def handle_endtag(self, tag):
-        if tag in ('script', 'style') and self._skip:
-            self._skip -= 1
-
-    def handle_data(self, data):
-        if not self._skip:
-            self.parts.append(data)
-
-
-def _visible_text(content: str) -> str:
-    extractor = _TextExtractor()
-    extractor.feed(content)
-    extractor.close()
-    return ' '.join(extractor.parts)
 
 
 def _declared_type(attachment: dict) -> str:
@@ -280,13 +256,8 @@ class Indicators:
     # --- Values read from the email ----------------------------------------
 
     @cached_property
-    def _header(self) -> dict:
-        return self.email['header']
-
-    @cached_property
     def _from_host(self) -> Optional[str]:
-        address = self._header.get('from') or ''
-        domain = address.rpartition('@')[2].strip().lower()
+        domain = email_parser.sender_domain(self.email)
         return _normalize_domain(domain) if domain else None
 
     @cached_property
@@ -302,13 +273,8 @@ class Indicators:
         ``http://``. ``host`` is normalized like the From domain
         (punycode to Unicode, lower-case), so blocklist keys match.
         """
-        candidates = (
-            url if with_scheme else f'http://{url}'
-            for body in self.email.get('body', [])
-            for key, with_scheme in (('uri', True), ('uri_noscheme', False))
-            for url in body.get(key, []))
         seen, urls = set(), []
-        for url in candidates:
+        for url in email_parser.body_urls(self.email):
             if len(urls) >= config.MAX_URLS_ANALYZED:
                 break
             if url in seen:
@@ -325,7 +291,7 @@ class Indicators:
 
     @cached_property
     def _attachments(self) -> list:
-        return self.email.get('attachment') or []
+        return email_parser.attachments(self.email)
 
     @cached_property
     def _legit_index(self) -> tuple:
@@ -356,8 +322,7 @@ class Indicators:
         (``config.TRUSTED_AUTHSERV_IDS``): the sender can write any
         header below it, so results are never mixed across headers.
         """
-        headers = self._header.get('header', {}).get(
-            'authentication-results', [])
+        headers = email_parser.header(self.email, 'authentication-results')
         results = {'spf': 'none', 'dkim': 'none', 'dmarc': 'none'}
         trust_reasons = ()
         if not headers:
@@ -400,8 +365,7 @@ class Indicators:
             if len(sub_labels) > config.MAX_SUBDOMAINS:
                 flags.append('url-many-subdomains')
             raw_host = parts.hostname or host
-            if not raw_host.isascii() or any(
-                    label.startswith('xn--') for label in raw_host.split('.')):
+            if _is_internationalized(raw_host):
                 flags.append('url-punycode')  # internationalized host
         if parts.username is not None:
             flags.append('url-userinfo')
@@ -480,9 +444,8 @@ class Indicators:
         legit, brands = self._legit_index
         reasons, matched, score = set(), set(), config.NOT_PHISHING
 
-        raw_from = (self._header.get('header', {}).get('from') or [''])[0]
-        words = [w for w in re.split(r'[\W_]+',
-                                     parseaddr(raw_from)[0].lower()) if w]
+        words = [w for w in re.split(
+            r'[\W_]+', email_parser.display_name(self.email).lower()) if w]
         # Whole words, or up to 3 adjacent words joined ("Bank of America").
         display = {''.join(words[i:i + n]) for n in (1, 2, 3)
                    for i in range(len(words) - n + 1)}
@@ -498,11 +461,8 @@ class Indicators:
                 score = config.PROBABLY_PHISHING
 
         if registered not in legit:
-            from_domain = (self._header.get('from') or '').rpartition(
-                '@')[2].strip().lower()
-            if not from_domain.isascii() or any(
-                    label.startswith('xn--')
-                    for label in from_domain.split('.')):
+            if _is_internationalized(
+                    email_parser.sender_domain(self.email)):
                 reasons.add('from-punycode')  # internationalized domain
                 score = max(score, config.PROBABLY_PHISHING)
             tokens = set(re.split(r'[.\-]', self._from_host))
@@ -529,13 +489,15 @@ class Indicators:
     def detect_suspicious_wording(self) -> IndicatorResult:
         """Match a static, normalized phrase map (English and Hebrew)."""
         limit = config.MAX_WORDING_CHARS
-        texts = [self._header.get('subject') or '']
+        texts = [email_parser.subject(self.email)]
         length = len(texts[0])
-        for body in self.email.get('body', []):
-            if length >= limit:
-                break  # the cap bounds the HTML parsing too
-            texts.append(_visible_text((body.get('content') or '')[:limit]))
-            length += len(texts[-1]) + 1
+        bodies = email_parser.body_texts(self.email, limit)
+        while length < limit:  # the cap bounds the HTML parsing too
+            body_text = next(bodies, None)
+            if body_text is None:
+                break
+            texts.append(body_text)
+            length += len(body_text) + 1
         text = _normalize_text(' '.join(texts)[:limit])
         padded = f' {text} '
         hits = {(category, phrase) for category, phrase in _PHRASES
@@ -667,8 +629,8 @@ class Indicators:
         ``{verdict, verdict_name, score, indicators}``; for a blocklist
         hit the indicators are the ones saved with the entry.
         """
-        message_id = self._header.get('header', {}).get(
-            'message-id', [None])[0]
+        message_id = (email_parser.header(self.email, 'message-id')
+                      or [None])[0]
         entries = self.check_blocklist()
         if entries:
             report = next((e.report for e in entries if e.report), None)
