@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phishing Detector</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+  #error { color: #b00020; }
+  #meta { color: #666; font-size: .85rem; }
+</style>
+</head>
+<body>
+<h1>Phishing Detector</h1>
+<input type="file" id="file" accept=".eml,.txt,message/rfc822">
+<button id="go">Analyze</button>
+<p id="error"></p>
+<h2 id="verdict"></h2>
+<ul id="list"></ul>
+<p id="meta"></p>
+<script>
+const $ = id => document.getElementById(id);
+
+$('go').onclick = async () => {
+  ['error', 'verdict', 'meta'].forEach(id => $(id).textContent = '');
+  $('list').replaceChildren();
+  const f = $('file').files[0];
+  if (!f) { $('error').textContent = 'Choose an email file first.'; return; }
+  const body = new FormData();
+  body.append('file', f);
+  try {
+    const r = await fetch('/api/analyze', { method: 'POST', body });
+    const instance = r.headers.get('X-Instance-Id');
+    if (instance) $('meta').textContent = 'Answered by: ' + instance;
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { $('error').textContent = j.detail || ('Error ' + r.status); return; }
+    $('verdict').textContent = j.verdict_name + ' (score ' + j.score + ')';
+    if (!j.indicators) { $('list').replaceChildren(li('Blocklisted')); return; }
+    $('list').replaceChildren(...Object.entries(j.indicators)
+      .map(([name, v]) => li(name + ': ' + v.score)));
+  } catch (e) {
+    $('error').textContent = 'Request failed.';
+  }
+};
+
+function li(text) {
+  const el = document.createElement('li');
+  el.textContent = text;
+  return el;
+}
+</script>
+</body>
+</html>
