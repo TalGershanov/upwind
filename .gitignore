@@ -1,5 +1,15 @@
+.DS_Store
 .idea/
 .venv/
 __pycache__/
 .pytest_cache/
 logs/
+
+# Terraform: local state and plugins must never be committed
+# (.terraform.lock.hcl SHOULD be committed — it pins provider versions)
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+crash.log
