@@ -1,7 +1,7 @@
 """The contract between the logic layer and the data access layer.
 
 The DAL implements :class:`HistoryStore`; the logic layer only depends on
-this interface (dependency inversion), so tests use an in-memory fake.
+this interface (dependency inversion), so it can be mocked in tests.
 """
 
 from abc import ABC, abstractmethod
