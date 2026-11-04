@@ -39,3 +39,15 @@ variable "app_port" {
   type        = number
   default     = 8000
 }
+
+variable "db_identifier" {
+  description = "Identifier of the existing RDS instance (created by hand; Terraform only reads it)."
+  type        = string
+  default     = "phishing-detector-db"
+}
+
+variable "instance_type" {
+  description = "EC2 instance type for the app servers."
+  type        = string
+  default     = "t3.micro"
+}

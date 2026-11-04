@@ -1,0 +1,73 @@
+#!/bin/bash
+set -euo pipefail
+# Boot script for the app servers. Output goes to /var/log/cloud-init-output.log.
+
+APP_DIR=/opt/phishing-detector
+LOG_DIR=/var/log/phishing-detector
+ENV_FILE=/etc/phishing-detector.env
+
+# a. Packages and the service user (no login shell)
+dnf install -y python3.12 python3.12-pip unzip
+useradd --system --shell /sbin/nologin app
+
+# b. Download and unpack the app, then install its dependencies in a venv
+mkdir -p $APP_DIR
+aws s3 cp "s3://${bucket}/${artifact_key}" /tmp/app.zip --region ${region}
+unzip -o /tmp/app.zip -d $APP_DIR
+python3.12 -m venv $APP_DIR/venv
+$APP_DIR/venv/bin/pip install --no-cache-dir -r $APP_DIR/requirements.txt
+
+# c. Settings for the app (no password here: it is read from Secrets Manager at runtime)
+mkdir -p $LOG_DIR
+chown app:app $LOG_DIR
+cat > $ENV_FILE <<'ENVEOF'
+DB_HOST=${db_host}
+DB_PORT=${db_port}
+DB_NAME=${db_name}
+DB_SECRET_ARN=${db_secret_arn}
+AWS_REGION=${region}
+PHISHING_LOG_FILE=/var/log/phishing-detector/phishing.log
+ENVEOF
+chown root:app $ENV_FILE
+chmod 640 $ENV_FILE
+
+# d. Create the tables. Both instances may run this at once, so retry.
+# If it still fails, log it and keep going: a running app can be debugged
+# (/health/deep, SSM); a boot that aborts here would just be replaced in a loop.
+init_ok=false
+for attempt in 1 2 3 4 5; do
+  if runuser -u app -- bash -c "set -a; . $ENV_FILE; set +a; cd $APP_DIR && $APP_DIR/venv/bin/python -m dal.init_db"; then
+    init_ok=true
+    break
+  fi
+  echo "init_db attempt $attempt/5 failed" >&2
+  sleep 10
+done
+if [ "$init_ok" != true ]; then
+  echo "ERROR: dal.init_db failed after 5 attempts; starting the service anyway. Check DB access and the secret." >&2
+fi
+
+# e. Run the app under systemd
+cat > /etc/systemd/system/phishing-detector.service <<'UNITEOF'
+[Unit]
+Description=Phishing detector API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=app
+WorkingDirectory=/opt/phishing-detector
+EnvironmentFile=/etc/phishing-detector.env
+ExecStart=/opt/phishing-detector/venv/bin/gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:${app_port} --access-logfile - api.main:app
+Restart=always
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/phishing-detector
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+systemctl daemon-reload
+systemctl enable --now phishing-detector
