@@ -8,8 +8,6 @@ PROBABLY_PHISHING = 3
 PROBABLY_NOT_PHISHING = 2
 NOT_PHISHING = 1
 
-# INDICATOR WEIGHT
-
 # LOGGING
 LOG_LEVEL = os.environ.get('PHISHING_LOG_LEVEL', 'INFO')
 LOG_FILE = os.environ.get('PHISHING_LOG_FILE', 'logs/phishing.log')
@@ -35,20 +33,6 @@ INDICATOR_WEIGHTS = {
     'Suspicious wording': 0.10,
     'Sender history': 0.05,
 }
-# When both indicators of a pair are at least PROBABLY_PHISHING, the
-# suspicion amplifies: AMPLIFY_BONUS is added to the weighted score.
-AMPLIFY_PAIRS = (
-    ('Sender Authentication', 'Spoofed sender'),
-    ('Spoofed sender', 'Suspicious links'),
-    ('Suspicious links', 'Suspicious wording'),
-    ('Attachment analysis', 'Suspicious wording'),
-    ('Sender Authentication', 'Suspicious links'),
-)
-AMPLIFY_BONUS = 0.5
-# One PHISHING from these indicators keeps the verdict at least at
-# PROBABLY_PHISHING, so a strong signal is not diluted by the average.
-STRONG_SIGNAL_INDICATORS = ('Suspicious links', 'Attachment analysis',
-                            'Spoofed sender')
 # (upper bound of the weighted score, verdict); the last one is open.
 VERDICT_THRESHOLDS = (
     (1.75, NOT_PHISHING),
