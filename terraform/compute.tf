@@ -76,6 +76,14 @@ resource "aws_autoscaling_group" "app" {
   health_check_type         = "ELB"
   health_check_grace_period = 600 # dnf + pip + init_db can take several minutes on a t3.micro
 
+  # Group metrics (1-minute) so the dashboard can show instances in service.
+  enabled_metrics = [
+    "GroupInServiceInstances",
+    "GroupDesiredCapacity",
+    "GroupTotalInstances",
+  ]
+  metrics_granularity = "1Minute"
+
   launch_template {
     id = aws_launch_template.app.id
     # A concrete version number (not "$Latest"), so a new template version is
