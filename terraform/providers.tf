@@ -12,6 +12,11 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.0"
     }
+    # Generates the secret header value shared by CloudFront and the ALB.
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 }
 

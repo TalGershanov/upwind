@@ -44,6 +44,11 @@ output "cache_security_group_id" {
 
 output "app_url" {
   description = "Open this in a browser once the instances are healthy."
+  value       = "https://${aws_cloudfront_distribution.app.domain_name}"
+}
+
+output "alb_url" {
+  description = "Old direct ALB URL. No longer reachable (403 / blocked by the security group)."
   value       = "http://${aws_lb.app.dns_name}"
 }
 

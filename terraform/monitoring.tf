@@ -92,10 +92,11 @@ resource "aws_cloudwatch_metric_alarm" "unhealthy_hosts" {
   dimensions          = { LoadBalancer = local.lb, TargetGroup = local.tg }
   statistic           = "Maximum"
   period              = 60
-  evaluation_periods  = 2
+  evaluation_periods  = 5
   comparison_operator = "GreaterThanThreshold"
   threshold           = 0
   alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
 }
 
 # Redundancy lost: the ASG is fixed at 2 instances. No data counts as bad.
@@ -106,11 +107,12 @@ resource "aws_cloudwatch_metric_alarm" "healthy_hosts_low" {
   dimensions          = { LoadBalancer = local.lb, TargetGroup = local.tg }
   statistic           = "Minimum"
   period              = 60
-  evaluation_periods  = 2
+  evaluation_periods  = 5
   comparison_operator = "LessThanThreshold"
   threshold           = 2
   treat_missing_data  = "breaching"
   alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
 }
 
 # The app itself returns errors.
