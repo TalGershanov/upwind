@@ -588,14 +588,37 @@ class Indicators:
                     and results[first].score >= config.PROBABLY_PHISHING
                     and results[second].score >= config.PROBABLY_PHISHING):
                 score += config.AMPLIFY_BONUS
-        if any(name in results and results[name].score == config.PHISHING
-               for name in config.STRONG_SIGNAL_INDICATORS):
-            score = max(score, config.VERDICT_THRESHOLDS[1][0])
+        strong = [name for name in config.STRONG_SIGNAL_INDICATORS
+                  if name in results
+                  and results[name].score == config.PHISHING]
+        if strong:
+            # A verified known sender (see _verified_known_sender) may
+            # only be lifted to PROBABLY_NOT_PHISHING by a link alone.
+            only_links = strong == ['Suspicious links']
+            level = (0 if only_links and self._verified_known_sender(results)
+                     else 1)
+            score = max(score, config.VERDICT_THRESHOLDS[level][0])
         score = min(score, float(config.PHISHING))
         for upper, verdict in config.VERDICT_THRESHOLDS:
             if score < upper:
                 return verdict, round(score, 2)
         return config.PHISHING, round(score, 2)
+
+    def _verified_known_sender(self, results: dict) -> bool:
+        """Allowlisted, fully authenticated and a well-known domain.
+
+        Reputation alone can be built by an attacker (a few clean
+        messages), so SPF, DKIM and DMARC must all pass and the domain
+        must be in the legit list (seed or popular domains) as well.
+        """
+        history = results.get('Sender history')
+        auth = results.get('Sender Authentication')
+        if history is None or auth is None:
+            return False
+        authenticated = all(auth.details.get(name) == 'pass'
+                            for name in ('spf', 'dkim', 'dmarc'))
+        return ('sender-allowlisted' in history.reasons and authenticated
+                and self._from_registered in self._legit_index[0])
 
     # --- Blocklist, analysis and recording ---------------------------------
 

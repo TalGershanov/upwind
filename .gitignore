@@ -16,3 +16,5 @@ crash.log
 
 # Terraform: generated app zip (rebuilt on every plan)
 terraform/build/
+tests/
+tests/
