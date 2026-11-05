@@ -36,11 +36,3 @@ class Blocklist(Base):
                       default=_utcnow)
     report = Column(JSON().with_variant(JSONB(), 'postgresql'),
                     nullable=True)
-
-
-class LegitDomain(Base):
-    """A registered domain known to be legit."""
-
-    __tablename__ = 'legit_domains'
-
-    domain = Column(String, primary_key=True)

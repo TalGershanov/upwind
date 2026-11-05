@@ -17,7 +17,7 @@ from sqlalchemy.engine import URL
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
-from dal.models import Base, Blocklist, LegitDomain
+from dal.models import Base, Blocklist
 from dal.models import Reputation as ReputationRow
 from logic import config
 from logic.history_store import BlocklistEntry, HistoryStore, Reputation
@@ -169,16 +169,3 @@ class RDSHistoryStore(HistoryStore):
                           ReputationRow.legit_count + legit_inc,
                           'phishing_count':
                           ReputationRow.phishing_count + phishing_inc}))
-
-    @_retry_on_auth_failure
-    def get_legit_domains(self) -> set:
-        with self._session() as session:
-            return set(session.scalars(select(LegitDomain.domain)))
-
-    @_retry_on_auth_failure
-    def add_legit_domain(self, domain: str) -> None:
-        with self._session.begin() as session:
-            session.execute(
-                pg_insert(LegitDomain)
-                .values(domain=_norm(domain))
-                .on_conflict_do_nothing(index_elements=['domain']))
