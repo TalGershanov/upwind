@@ -51,3 +51,8 @@ variable "instance_type" {
   type        = string
   default     = "t3.micro"
 }
+
+variable "alert_email" {
+  description = "Email that receives CloudWatch alarm notifications (pass with -var; must confirm the SNS subscription)."
+  type        = string
+}
