@@ -15,7 +15,6 @@ import logging
 import mimetypes
 import re
 import unicodedata
-import weakref
 import zipfile
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -28,7 +27,7 @@ import eml_parser.decode
 import eml_parser.regexes
 from publicsuffixlist import PublicSuffixList
 
-from logic import config, email_parser
+from logic import config, email_parser, known_domains
 from logic.history_store import HistoryStore
 
 logger = logging.getLogger(__name__)
@@ -47,8 +46,6 @@ _HOST_URL_FLAGS = ('url-ip-host', 'url-cheap-tld', 'url-punycode')
 # a look-alike through one of these.
 _LOOKALIKE_CHARS = frozenset(frozenset(pair) for pair in (
     '0o', '1l', '1i', 'il', '5s', '3e', '4a', '8b', '9g', 'uv'))
-# Brand index per store, cleared when this module adds a legit domain.
-_LEGIT_INDEX_CACHE = weakref.WeakKeyDictionary()
 _AUTH_RESULT_RE = eml_parser.regexes.authentication_result_regex
 # Different names for the same type, mapped to the one mimetypes guesses.
 _MIME_ALIASES = {
@@ -125,6 +122,21 @@ def _registered_domain(host: str) -> str:
         return host
     _, label, suffix = _split_host(host)
     return f'{label}.{suffix}' if label else host
+
+
+def _build_legit_index() -> tuple:
+    """``(registered legit domains, {brand label: {domains}})``.
+
+    Brands come only from ``config.LEGIT_DOMAINS_SEED``. The popular
+    domains (Tranco) are legit too, but are not brands: thousands of
+    ordinary words would otherwise match as look-alikes.
+    """
+    seed = {_registered_domain(domain)
+            for domain in config.LEGIT_DOMAINS_SEED}
+    brands = {}
+    for domain in seed:
+        brands.setdefault(_split_host(domain)[1], set()).add(domain)
+    return frozenset(seed | known_domains.load_top_domains()), brands
 
 
 def _normalize_domain(domain: str) -> str:
@@ -295,21 +307,8 @@ class Indicators:
 
     @cached_property
     def _legit_index(self) -> tuple:
-        """``(registered legit domains, {brand label: {domains}})``.
-
-        Built once per store from the seed and the history store.
-        """
-        cached = _LEGIT_INDEX_CACHE.get(self.store)
-        if cached is not None:
-            return cached
-        domains = set(config.LEGIT_DOMAINS_SEED)
-        domains |= set(self.store.get_legit_domains())
-        registered = {_registered_domain(domain) for domain in domains}
-        brands = {}
-        for domain in registered:
-            brands.setdefault(_split_host(domain)[1], set()).add(domain)
-        _LEGIT_INDEX_CACHE[self.store] = registered, brands
-        return registered, brands
+        """``(registered legit domains, {brand label: {domains}})``."""
+        return _build_legit_index()
 
     # --- Sender Authentication ---------------------------------------------
 
@@ -588,14 +587,37 @@ class Indicators:
                     and results[first].score >= config.PROBABLY_PHISHING
                     and results[second].score >= config.PROBABLY_PHISHING):
                 score += config.AMPLIFY_BONUS
-        if any(name in results and results[name].score == config.PHISHING
-               for name in config.STRONG_SIGNAL_INDICATORS):
-            score = max(score, config.VERDICT_THRESHOLDS[1][0])
+        strong = [name for name in config.STRONG_SIGNAL_INDICATORS
+                  if name in results
+                  and results[name].score == config.PHISHING]
+        if strong:
+            # A verified known sender (see _verified_known_sender) may
+            # only be lifted to PROBABLY_NOT_PHISHING by a link alone.
+            only_links = strong == ['Suspicious links']
+            level = (0 if only_links and self._verified_known_sender(results)
+                     else 1)
+            score = max(score, config.VERDICT_THRESHOLDS[level][0])
         score = min(score, float(config.PHISHING))
         for upper, verdict in config.VERDICT_THRESHOLDS:
             if score < upper:
                 return verdict, round(score, 2)
         return config.PHISHING, round(score, 2)
+
+    def _verified_known_sender(self, results: dict) -> bool:
+        """Allowlisted, fully authenticated and a well-known domain.
+
+        Reputation alone can be built by an attacker (a few clean
+        messages), so SPF, DKIM and DMARC must all pass and the domain
+        must be in the legit list (seed or popular domains) as well.
+        """
+        history = results.get('Sender history')
+        auth = results.get('Sender Authentication')
+        if history is None or auth is None:
+            return False
+        authenticated = all(auth.details.get(name) == 'pass'
+                            for name in ('spf', 'dkim', 'dmarc'))
+        return ('sender-allowlisted' in history.reasons and authenticated
+                and self._from_registered in self._legit_index[0])
 
     # --- Blocklist, analysis and recording ---------------------------------
 
@@ -675,21 +697,18 @@ class Indicators:
                 results: Optional[dict] = None) -> None:
         """Update the history store with the outcome.
 
-        The legit list and the legit count only grow for fully
-        authenticated senders, so a forged From can't build a good name,
-        and the legit list never learns a look-alike of a known brand.
+        The legit count only grows for fully authenticated senders, so a
+        forged From can't build a good name.
         """
         domain = self._from_registered
         if domain:
             self.store.record_message(domain, verdict, fully_authenticated)
-            if (verdict == config.NOT_PHISHING and fully_authenticated
-                    and results and results['Spoofed sender'].score
-                    == config.NOT_PHISHING):
-                self.store.add_legit_domain(domain)
-                _LEGIT_INDEX_CACHE.pop(self.store, None)
         if verdict != config.PHISHING or not results:
             return
-        legit = self._legit_index[0]
+        # Only the curated seed (the brands) is exempt; popular domains
+        # include shared-hosting and shortener hosts that can serve phishing.
+        legit = {d for domains in self._legit_index[1].values()
+                 for d in domains}
         for name in ('Suspicious links', 'Attachment analysis'):
             for item in results[name].details.get('block', []):
                 if item['kind'] != 'domain' or item['value'] not in legit:

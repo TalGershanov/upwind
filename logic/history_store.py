@@ -35,7 +35,7 @@ class BlocklistEntry:
 
 
 class HistoryStore(ABC):
-    """Blocklist, sender reputation and the growing legit-domain list."""
+    """Blocklist and sender reputation."""
 
     @abstractmethod
     def get_blocklist_entry(self, kind: str,
@@ -60,11 +60,3 @@ class HistoryStore(ABC):
         when ``fully_authenticated`` is true (SPF, DKIM and DMARC all
         passed). A phishing verdict adds to ``phishing_count``.
         """
-
-    @abstractmethod
-    def get_legit_domains(self) -> set:
-        """Return the registered domains known to be legit."""
-
-    @abstractmethod
-    def add_legit_domain(self, domain: str) -> None:
-        """Add ``domain`` to the legit list."""
