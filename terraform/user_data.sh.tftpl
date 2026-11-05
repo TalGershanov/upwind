@@ -7,7 +7,7 @@ LOG_DIR=/var/log/phishing-detector
 ENV_FILE=/etc/phishing-detector.env
 
 # a. Packages and the service user (no login shell)
-dnf install -y python3.12 python3.12-pip unzip
+dnf install -y python3.12 python3.12-pip unzip logrotate
 useradd --system --shell /sbin/nologin app
 
 # b. Download and unpack the app, then install its dependencies in a venv
@@ -20,6 +20,22 @@ $APP_DIR/venv/bin/pip install --no-cache-dir -r $APP_DIR/requirements.txt
 # c. Settings for the app (no password here: it is read from Secrets Manager at runtime)
 mkdir -p $LOG_DIR
 chown app:app $LOG_DIR
+
+# Rotate both app logs (phishing.log and access.log). copytruncate keeps gunicorn and the
+# app writing to the same file, so no restart is needed. The directory is owned by app,
+# so logrotate works in it as that user.
+cat > /etc/logrotate.d/phishing-detector <<'LREOF'
+/var/log/phishing-detector/*.log {
+    su app app
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+LREOF
+
 cat > $ENV_FILE <<'ENVEOF'
 DB_HOST=${db_host}
 DB_PORT=${db_port}
@@ -58,7 +74,7 @@ Wants=network-online.target
 User=app
 WorkingDirectory=/opt/phishing-detector
 EnvironmentFile=/etc/phishing-detector.env
-ExecStart=/opt/phishing-detector/venv/bin/gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:${app_port} --access-logfile - api.main:app
+ExecStart=/opt/phishing-detector/venv/bin/gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:${app_port} --access-logfile /var/log/phishing-detector/access.log api.main:app
 Restart=always
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -77,14 +93,17 @@ systemctl enable --now phishing-detector
 if dnf install -y amazon-cloudwatch-agent; then
   cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWEOF'
 {
+  "agent": {
+    "metrics_collection_interval": 60
+  },
   "metrics": {
     "namespace": "CWAgent",
-    "metrics_collection_interval": 60,
     "append_dimensions": {
       "InstanceId": "$${aws:InstanceId}",
       "AutoScalingGroupName": "$${aws:AutoScalingGroupName}"
     },
     "metrics_collected": {
+      "cpu": { "measurement": ["cpu_usage_active"], "totalcpu": true },
       "mem": { "measurement": ["mem_used_percent"] },
       "disk": { "measurement": ["disk_used_percent"], "resources": ["/"] }
     }
@@ -101,6 +120,11 @@ if dnf install -y amazon-cloudwatch-agent; then
           {
             "file_path": "/var/log/cloud-init-output.log",
             "log_group_name": "/phishing-detector/boot",
+            "log_stream_name": "{instance_id}"
+          },
+          {
+            "file_path": "/var/log/phishing-detector/access.log",
+            "log_group_name": "/phishing-detector/access",
             "log_stream_name": "{instance_id}"
           }
         ]
