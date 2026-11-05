@@ -21,6 +21,11 @@ resource "aws_cloudwatch_log_group" "boot" {
   retention_in_days = 14
 }
 
+resource "aws_cloudwatch_log_group" "access" {
+  name              = "/phishing-detector/access"
+  retention_in_days = 14
+}
+
 # One counter per verdict. Lines look like: ... Analysis message_id=.. verdict=PHISHING score=..
 # (none of the five patterns is a substring of another).
 resource "aws_cloudwatch_log_metric_filter" "verdict" {
@@ -149,6 +154,7 @@ resource "aws_cloudwatch_metric_alarm" "response_time_p95" {
   evaluation_periods  = 1
   comparison_operator = "GreaterThanThreshold"
   threshold           = 1
+  treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.alerts.arn]
 }
 
@@ -231,74 +237,83 @@ locals {
   m_latency   = ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", local.lb]
 
   # One line per instance, found by search so replaced instances show up by themselves.
-  # (EC2 metrics cannot be filtered by ASG, so this lists every instance in the region.)
-  search_cpu     = "SEARCH('{AWS/EC2,InstanceId} MetricName=\"CPUUtilization\"', 'Average', 300)"
+  # (EC2 metrics cannot be filtered by ASG, so the credit search lists every instance in the region.)
+  # CPU comes from the CloudWatch agent (cpu_usage_active), so it can be filtered by ASG.
+  search_cpu     = "SEARCH('{CWAgent,AutoScalingGroupName,InstanceId,cpu} AutoScalingGroupName=\"${local.asg}\" MetricName=\"cpu_usage_active\" cpu=\"cpu-total\"', 'Average', 60)"
   search_credits = "SEARCH('{AWS/EC2,InstanceId} MetricName=\"CPUCreditBalance\"', 'Average', 300)"
   search_mem     = "SEARCH('{CWAgent,AutoScalingGroupName,InstanceId} AutoScalingGroupName=\"${local.asg}\" MetricName=\"mem_used_percent\"', 'Average', 60)"
   search_disk    = "SEARCH('{CWAgent,AutoScalingGroupName,InstanceId,device,fstype,path} AutoScalingGroupName=\"${local.asg}\" MetricName=\"disk_used_percent\" path=\"/\"', 'Average', 60)"
 
+  # Absolute positions, matching the layout saved in the console (Monitoring header is at y=13).
   ops_widgets = [
-    # --- 1. Health ---
+    # --- Health ---
     {
-      type = "metric", x = 0, y = 3, width = 12, height = 6
+      type = "metric", x = 0, y = 14, width = 6, height = 6
       properties = {
-        title = "Target group health", view = "timeSeries", region = local.region, period = 60
+        title = "Target group health", view = "timeSeries", region = local.region, period = 60, stat = "Maximum", liveData = true
         metrics = [
-          concat(local.m_healthy, [{ stat = "Minimum" }]),
-          concat(local.m_unhealthy, [{ stat = "Maximum" }]),
+          concat(local.m_healthy, [{ stat = "Minimum", color = "#2ca02c" }]),
+          concat(local.m_unhealthy, [{ color = "#d62728" }]),
         ]
       }
     },
     {
-      type = "metric", x = 12, y = 3, width = 12, height = 6
+      type = "metric", x = 0, y = 20, width = 4, height = 6
       properties = {
-        title   = "ASG instances in service", view = "timeSeries", region = local.region, period = 60
-        metrics = [["AWS/AutoScaling", "GroupInServiceInstances", "AutoScalingGroupName", local.asg, { stat = "Average" }]]
+        title                = "ASG instances in service", view = "gauge", region = local.region, period = 60, liveData = true
+        setPeriodToTimeRange = true, stacked = true
+        yAxis                = { left = { min = 0, max = 2 } }
+        metrics              = [["AWS/AutoScaling", "GroupInServiceInstances", "AutoScalingGroupName", local.asg, { stat = "Average", color = "#f7b6d2", label = "ASG instances" }]]
       }
     },
 
-    # --- 2. Resources ---
+    # --- Resources ---
     {
-      type = "metric", x = 0, y = 9, width = 6, height = 6
+      type = "metric", x = 6, y = 14, width = 6, height = 6
       properties = {
-        title   = "EC2 CPU %", view = "timeSeries", region = local.region
-        metrics = [[{ expression = local.search_cpu, id = "e1" }]]
-      }
-    },
-    {
-      type = "metric", x = 6, y = 9, width = 6, height = 6
-      properties = {
-        title   = "EC2 CPU credit balance", view = "timeSeries", region = local.region
+        title   = "EC2 CPU credit balance", view = "timeSeries", region = local.region, liveData = true
         metrics = [[{ expression = local.search_credits, id = "e1" }]]
       }
     },
     {
-      type = "metric", x = 12, y = 9, width = 6, height = 6
+      type = "metric", x = 12, y = 14, width = 6, height = 6
       properties = {
-        title   = "Memory used %", view = "timeSeries", region = local.region
+        title   = "CPU used % (per instance)", view = "timeSeries", region = local.region, liveData = true
+        metrics = [[{ expression = local.search_cpu, id = "e1" }]]
+      }
+    },
+    {
+      type = "metric", x = 18, y = 14, width = 6, height = 5
+      properties = {
+        title   = "Disk used % (/)", view = "timeSeries", region = local.region, liveData = true
+        metrics = [[{ expression = local.search_disk, id = "e1" }]]
+      }
+    },
+    {
+      type = "metric", x = 18, y = 19, width = 6, height = 7
+      properties = {
+        title   = "Memory used %", view = "timeSeries", region = local.region, liveData = true
         metrics = [[{ expression = local.search_mem, id = "e1" }]]
       }
     },
     {
-      type = "metric", x = 18, y = 9, width = 6, height = 6
+      type = "metric", x = 4, y = 20, width = 12, height = 6
       properties = {
-        title   = "Disk used % (/)", view = "timeSeries", region = local.region
-        metrics = [[{ expression = local.search_disk, id = "e1" }]]
+        title   = "App errors", view = "timeSeries", region = local.region, period = 60
+        metrics = [["PhishingDetector", "AppErrors", { stat = "Sum" }]]
       }
     },
 
-    # --- 3. Traffic ---
+    # --- Traffic and success vs failure ---
     {
-      type = "metric", x = 0, y = 15, width = 24, height = 6
+      type = "metric", x = 0, y = 26, width = 14, height = 6
       properties = {
         title   = "Requests per minute", view = "timeSeries", region = local.region, period = 60
         metrics = [concat(local.m_requests, [{ stat = "Sum" }])]
       }
     },
-
-    # --- 4. Success vs failure ---
     {
-      type = "metric", x = 0, y = 21, width = 12, height = 6
+      type = "metric", x = 14, y = 26, width = 7, height = 6
       properties = {
         title = "Responses by status (stacked)", view = "timeSeries", stacked = true, region = local.region, period = 60
         metrics = [
@@ -310,9 +325,9 @@ locals {
       }
     },
     {
-      type = "metric", x = 12, y = 21, width = 12, height = 6
+      type = "metric", x = 21, y = 26, width = 3, height = 6
       properties = {
-        title = "Response time (s)", view = "timeSeries", region = local.region, period = 60
+        title = "Response time (s)", view = "timeSeries", region = local.region, period = 60, liveData = true
         metrics = [
           concat(local.m_latency, [{ stat = "p50", label = "p50" }]),
           concat(local.m_latency, [{ stat = "p95", label = "p95" }]),
@@ -320,64 +335,70 @@ locals {
       }
     },
 
-    # --- App behavior (from log metric filters) ---
+    # --- Database ---
     {
-      type = "metric", x = 0, y = 27, width = 12, height = 6
+      type = "metric", x = 0, y = 32, width = 8, height = 6
       properties = {
-        title   = "Verdicts over time", view = "timeSeries", stacked = true, region = local.region, period = 300
-        metrics = [for v in local.verdicts : ["PhishingDetector", "Verdict_${v}", { stat = "Sum", label = v }]]
+        title   = "RDS connections", view = "timeSeries", region = local.region, period = 60, stacked = false, liveData = true
+        yAxis   = { left = { min = 0 } }
+        metrics = [["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", local.rds, { stat = "Average", color = "#9467bd" }]]
       }
     },
     {
-      type = "metric", x = 12, y = 27, width = 12, height = 6
+      type = "metric", x = 8, y = 32, width = 5, height = 6
       properties = {
-        title   = "App errors", view = "timeSeries", region = local.region, period = 60
-        metrics = [["PhishingDetector", "AppErrors", { stat = "Sum" }]]
+        title   = "RDS CPU %", view = "timeSeries", region = local.region, period = 60, liveData = true
+        yAxis   = { left = { max = 50 } }
+        metrics = [["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", local.rds, { stat = "Average", color = "#9467bd" }]]
+      }
+    },
+    {
+      type = "metric", x = 13, y = 32, width = 8, height = 6
+      properties = {
+        title   = "RDS free storage (bytes)", view = "timeSeries", region = local.region, period = 300, stat = "Minimum"
+        stacked = false, liveData = true, sparkline = false, setPeriodToTimeRange = false, singleValueFullPrecision = false
+        yAxis   = { left = { showUnits = true } }
+        metrics = [["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", local.rds, { label = "RDS free storage", color = "#9467bd" }]]
+      }
+    },
+    {
+      # Used = allocated storage (GiB -> bytes, from the DB instance) minus free space.
+      type = "metric", x = 21, y = 32, width = 3, height = 6
+      properties = {
+        title = "RDS used storage", view = "singleValue", region = local.region, period = 300, stat = "Average", sparkline = false, liveData = true
+        metrics = [
+          [{ expression = "${data.aws_db_instance.main.allocated_storage * 1073741824} - m1", label = "used", id = "e1", color = "#9467bd" }],
+          ["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", local.rds, { id = "m1", label = "m1", period = 60, color = "#9467bd", visible = false }],
+        ]
       }
     },
 
-    # --- 5. Database ---
+    # --- Logs ---
     {
-      type = "metric", x = 0, y = 33, width = 8, height = 6
-      properties = {
-        title   = "RDS CPU %", view = "timeSeries", region = local.region, period = 60
-        metrics = [["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", local.rds, { stat = "Average" }]]
-      }
-    },
-    {
-      type = "metric", x = 8, y = 33, width = 8, height = 6
-      properties = {
-        title   = "RDS connections", view = "timeSeries", region = local.region, period = 60
-        metrics = [["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", local.rds, { stat = "Average" }]]
-      }
-    },
-    {
-      type = "metric", x = 16, y = 33, width = 8, height = 6
-      properties = {
-        title   = "RDS free storage (bytes)", view = "timeSeries", region = local.region, period = 300
-        metrics = [["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", local.rds, { stat = "Minimum" }]]
-      }
-    },
-
-    # --- 6. Logs ---
-    {
-      type = "log", x = 0, y = 39, width = 12, height = 10
+      type = "log", x = 0, y = 38, width = 12, height = 10
       properties = {
         title = "Latest 50 app log lines", view = "table", region = local.region
-        query = "SOURCE '${aws_cloudwatch_log_group.app.name}' | fields @timestamp, @message | sort @timestamp desc | limit 50"
+        query = "SOURCE '${aws_cloudwatch_log_group.app.name}' | fields @timestamp, @logStream, @message | sort @timestamp desc | limit 50"
       }
     },
     {
-      type = "log", x = 12, y = 39, width = 12, height = 10
+      type = "log", x = 12, y = 38, width = 12, height = 10
       properties = {
         title = "Analyses per instance (5 min)", view = "timeSeries", region = local.region
         query = "SOURCE '${aws_cloudwatch_log_group.app.name}' | filter @message like /Analysis message_id/ | stats count(*) as analyses by bin(5m), @logStream"
       }
     },
+    {
+      type = "log", x = 0, y = 48, width = 24, height = 6
+      properties = {
+        title = "Recent 4XX/5XX requests", view = "table", region = local.region
+        query = "SOURCE '${aws_cloudwatch_log_group.access.name}' | filter @message like /\" [45]\\d\\d/ | fields @timestamp, @logStream, @message | sort @timestamp desc | limit 20"
+      }
+    },
   ]
 }
 
-# ---------- Part 1: business overview (follows the dashboard time range) ----------
+# ---------- Business overview (follows the dashboard time range) ----------
 locals {
   # Verdict_* metric lines as hidden inputs m1..m5 for metric math, in local.verdicts order:
   # m1 PHISHING, m2 PROBABLY_PHISHING, m3 PROBABLY_NOT_PHISHING, m4 NOT_PHISHING, m5 BLOCKLIST.
@@ -409,7 +430,7 @@ locals {
       }
     },
     {
-      type = "metric", x = 8, y = 1, width = 4, height = 3
+      type = "metric", x = 4, y = 4, width = 4, height = 3
       properties = {
         title = "Phishing rate %", view = "singleValue", region = local.region, setPeriodToTimeRange = true
         metrics = concat(
@@ -419,21 +440,21 @@ locals {
       }
     },
     {
-      type = "metric", x = 12, y = 1, width = 4, height = 3
+      type = "metric", x = 0, y = 4, width = 4, height = 3
       properties = {
         title   = "Emails rejected", view = "singleValue", region = local.region, setPeriodToTimeRange = true
         metrics = [["PhishingDetector", "EmailsRejected", { stat = "Sum" }]]
       }
     },
     {
-      type = "metric", x = 16, y = 1, width = 4, height = 3
+      type = "metric", x = 8, y = 1, width = 4, height = 3
       properties = {
-        title   = "Healthy hosts (now)", view = "singleValue", region = local.region, period = 60
+        title   = "Healthy hosts (now)", view = "singleValue", region = local.region, period = 60, liveData = true
         metrics = [concat(local.m_healthy, [{ stat = "Minimum" }])]
       }
     },
     {
-      type = "metric", x = 20, y = 1, width = 4, height = 3
+      type = "metric", x = 8, y = 4, width = 4, height = 3
       properties = {
         title = "Error rate %", view = "singleValue", region = local.region, setPeriodToTimeRange = true
         metrics = [
@@ -445,28 +466,28 @@ locals {
       }
     },
     {
-      type = "metric", x = 0, y = 4, width = 8, height = 6
+      type = "metric", x = 12, y = 1, width = 7, height = 6
       properties = {
         title   = "Verdict mix", view = "pie", region = local.region, setPeriodToTimeRange = true
         metrics = [for v in local.verdicts : ["PhishingDetector", "Verdict_${v}", { stat = "Sum", label = v }]]
       }
     },
     {
-      type = "metric", x = 8, y = 4, width = 16, height = 6
+      type = "metric", x = 8, y = 7, width = 11, height = 6
       properties = {
         title   = "Verdicts over time", view = "timeSeries", stacked = true, region = local.region, period = 300
         metrics = [for v in local.verdicts : ["PhishingDetector", "Verdict_${v}", { stat = "Sum", label = v }]]
       }
     },
     {
-      type = "metric", x = 0, y = 10, width = 12, height = 6
+      type = "metric", x = 0, y = 7, width = 8, height = 6
       properties = {
         title   = "Emails rejected over time", view = "timeSeries", region = local.region, period = 300
         metrics = [["PhishingDetector", "EmailsRejected", { stat = "Sum" }]]
       }
     },
     {
-      type = "alarm", x = 12, y = 10, width = 12, height = 6
+      type = "alarm", x = 19, y = 1, width = 5, height = 12
       properties = {
         title  = "Alarms"
         alarms = local.alarm_arns
@@ -476,14 +497,12 @@ locals {
 }
 
 locals {
-  # Part 2 content starts at y=17 (after the header at y=16); the first ops widget is written at y=3.
-  ops_y_shift = 14
-
+  # Every widget has absolute coordinates (matching the layout saved in the console).
   widgets = concat(
-    [{ type = "text", x = 0, y = 0, width = 24, height = 1, properties = { markdown = "## Part 1 — Business overview" } }],
+    [{ type = "text", x = 0, y = 0, width = 24, height = 1, properties = { markdown = "## Business overview" } }],
     local.overview_widgets,
-    [{ type = "text", x = 0, y = 16, width = 24, height = 1, properties = { markdown = "## Part 2 — Technical / operations" } }],
-    [for w in local.ops_widgets : merge(w, { y = w.y + local.ops_y_shift })],
+    [{ type = "text", x = 0, y = 13, width = 24, height = 1, properties = { markdown = "## Monitoring" } }],
+    local.ops_widgets,
   )
 }
 
