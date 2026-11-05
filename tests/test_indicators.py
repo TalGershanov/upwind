@@ -24,7 +24,6 @@ def empty_store():
     store = create_autospec(HistoryStore, instance=True)
     store.get_blocklist_entry.return_value = None
     store.get_reputation.return_value = None
-    store.get_legit_domains.return_value = set()
     return store
 
 
@@ -93,6 +92,17 @@ class TestSpoofedSender:
     def test_phishy_list_is_flagged(self, domain):
         result = self.spoof(domain)
         assert result.score >= config.PROBABLY_PHISHING, domain
+
+    @pytest.mark.parametrize('domain', ['amazon.de', 'amazon.co.uk'])
+    def test_popular_brand_domain_with_brand_display_name(self, domain):
+        result = self.spoof(domain, display='Amazon')
+        assert result.score == config.NOT_PHISHING, result.reasons
+
+    def test_popular_domains_are_not_brands(self):
+        # 'news' is a popular site, but must not make every domain that
+        # contains the word a look-alike.
+        result = self.spoof('news-update.example')
+        assert result.score == config.NOT_PHISHING, result.reasons
 
 
 # =========================================================================
@@ -181,7 +191,6 @@ class TestAnalyze:
         analyzer(store=store).analyze()
         store.record_message.assert_called_once_with(
             'wolt.com', config.NOT_PHISHING, True)
-        store.add_legit_domain.assert_called_once_with('wolt.com')
 
     def test_report_can_be_a_json(self):
         report = analyzer().analyze()

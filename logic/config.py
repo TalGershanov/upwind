@@ -159,3 +159,10 @@ MAX_ZIP_ENTRIES = 1000
 MAX_ZIP_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # declared sizes, summed
 MAX_ZIP_RATIO = 200  # declared size / compressed size, per entry
 ZIP_RATIO_MIN_BYTES = 1_000_000  # ignore the ratio of small entries
+
+# KNOWN DOMAINS
+# The 10,000 most popular registered domains (Tranco list of 2026-11-05),
+# bundled as a static file and never refreshed. They count as legit, but
+# are not used as brands for look-alike matching.
+TRANCO_FILE = os.path.join(os.path.dirname(__file__), 'data',
+                           'tranco_top10k.txt')

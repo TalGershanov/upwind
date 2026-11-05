@@ -38,7 +38,6 @@ class FakeDB:
     def __init__(self, password):
         self.password = password
         self.executed = []
-        self.legit_domains = {'example.com'}
         self.error = None  # force a specific error on every op
 
 
@@ -68,10 +67,6 @@ class FakeSession:
 
     def __exit__(self, *exc):
         return False
-
-    def scalars(self, statement):
-        self._connect()
-        return iter(self.engine.db.legit_domains)
 
     def execute(self, statement):
         self._connect()
@@ -130,7 +125,7 @@ class TestRotation:
         store = RDSHistoryStore(url_with(OLD_PASSWORD), refresh_url=refresh)
         db.password = NEW_PASSWORD  # secret rotated
 
-        assert store.get_legit_domains() == {'example.com'}
+        assert store.get_reputation('example.com') is None
         assert refresh.calls == 1
         assert len(db.engines) == 2
         assert db.engines[0].disposed
@@ -140,7 +135,7 @@ class TestRotation:
     def test_no_refresh_when_credentials_work(self, db):
         refresh = Refresher()
         store = RDSHistoryStore(url_with(OLD_PASSWORD), refresh_url=refresh)
-        store.get_legit_domains()
+        store.get_reputation('example.com')
         assert refresh.calls == 0
         assert len(db.engines) == 1
 
@@ -157,8 +152,7 @@ class TestRotation:
         refresh = Refresher()
         store = RDSHistoryStore(url_with(OLD_PASSWORD), refresh_url=refresh)
         db.password = NEW_PASSWORD
-        store.get_legit_domains()
-        store.add_legit_domain('a.com')
+        store.get_reputation('example.com')
         store.get_reputation('a.com')
         assert refresh.calls == 1
 
@@ -168,7 +162,7 @@ class TestRotation:
         db.password = NEW_PASSWORD
 
         with pytest.raises(OperationalError) as info:
-            store.get_legit_domains()
+            store.get_reputation('example.com')
         assert _is_auth_error(info.value)
         assert refresh.calls == 1
 
@@ -179,7 +173,7 @@ class TestRotation:
             'could not connect to server: Connection timed out'))
 
         with pytest.raises(OperationalError, match='timed out'):
-            store.get_legit_domains()
+            store.get_reputation('example.com')
         assert refresh.calls == 0
         assert len(db.engines) == 1
 
@@ -187,7 +181,7 @@ class TestRotation:
         store = RDSHistoryStore(url_with(OLD_PASSWORD))
         db.password = NEW_PASSWORD
         with pytest.raises(OperationalError, match='password authentication'):
-            store.get_legit_domains()
+            store.get_reputation('example.com')
         assert len(db.engines) == 1
 
     def test_refresh_failure_propagates_with_cause(self, db):
@@ -196,7 +190,7 @@ class TestRotation:
         db.password = NEW_PASSWORD
 
         with pytest.raises(DBConfigError) as info:
-            store.get_legit_domains()
+            store.get_reputation('example.com')
         assert isinstance(info.value.__cause__, OperationalError)
         assert not db.engines[0].disposed  # old engine kept
 
@@ -214,7 +208,7 @@ class TestRotation:
                                 refresh_url=Refresher())
         db.password = NEW_PASSWORD
         with caplog.at_level(logging.DEBUG):
-            store.get_legit_domains()
+            store.get_reputation('example.com')
         assert 'rebuilt the engine' in caplog.text
         assert OLD_PASSWORD not in caplog.text
         assert NEW_PASSWORD not in caplog.text
@@ -241,13 +235,13 @@ class TestCreateHistoryStore:
         client = FakeSecretsClient({'username': 'app',
                                     'password': OLD_PASSWORD})
         store = create_history_store(make_env(), client)
-        assert store.get_legit_domains() == {'example.com'}
+        assert store.get_reputation('example.com') is None
 
         # Rotation: Secrets Manager and the DB both get the new password.
         client.secret_string = ('{"username": "app", "password": "%s"}'
                                 % NEW_PASSWORD)
         db.password = NEW_PASSWORD
 
-        assert store.get_legit_domains() == {'example.com'}
+        assert store.get_reputation('example.com') is None
         assert len(client.calls) == 2
         assert db.engines[-1].url.password == NEW_PASSWORD

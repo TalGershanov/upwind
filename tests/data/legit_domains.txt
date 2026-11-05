@@ -33,3 +33,5 @@ coursera.org
 duolingo.com
 tripadvisor.com
 mail.github.com
+amazon.de
+amazon.co.uk

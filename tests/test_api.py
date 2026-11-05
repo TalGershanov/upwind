@@ -14,7 +14,6 @@ def store():
     store = create_autospec(RDSHistoryStore, instance=True)
     store.get_blocklist_entry.return_value = None
     store.get_reputation.return_value = None
-    store.get_legit_domains.return_value = set()
     return store
 
 

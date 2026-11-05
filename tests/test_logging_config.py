@@ -20,7 +20,6 @@ def _analyzer():
     store = create_autospec(HistoryStore, instance=True)
     store.get_blocklist_entry.return_value = None
     store.get_reputation.return_value = None
-    store.get_legit_domains.return_value = set()
     return Indicators(parse_email(SAMPLE.read_text(encoding='utf-8')),
                       store)
 
