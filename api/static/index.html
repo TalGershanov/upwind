@@ -37,7 +37,7 @@ $('go').onclick = async () => {
     $('verdict').textContent = j.verdict_name + ' (score ' + j.score + ')';
     if (!j.indicators) { $('list').replaceChildren(li('Blocklisted')); return; }
     $('list').replaceChildren(...Object.entries(j.indicators)
-      .map(([name, v]) => li(name + ': ' + v.score)));
+      .map(([name, v]) => li(name + ': ' + v.score + describe(v))));
   } catch (e) {
     $('error').textContent = 'Request failed.';
   }
@@ -46,7 +46,17 @@ $('go').onclick = async () => {
 function li(text) {
   const el = document.createElement('li');
   el.textContent = text;
+  el.style.whiteSpace = 'pre-line';
   return el;
+}
+
+// Reasons and the most useful details (which brand, which domain).
+function describe(v) {
+  const d = v.details || {};
+  const lines = [...(v.reasons || [])];
+  if (d.similar_to && d.similar_to.length) lines.push('looks like: ' + d.similar_to.join(', '));
+  if (d.sender_domain) lines.push('sent from: ' + d.sender_domain);
+  return lines.length ? '\n' + lines.join('\n') : '';
 }
 </script>
 </body>

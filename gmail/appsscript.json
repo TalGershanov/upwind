@@ -1,0 +1,22 @@
+{
+  "timeZone": "Asia/Jerusalem",
+  "runtimeVersion": "V8",
+  "exceptionLogging": "STACKDRIVER",
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/gmail.addons.execute",
+    "https://www.googleapis.com/auth/gmail.addons.current.message.readonly",
+    "https://www.googleapis.com/auth/script.external_request"
+  ],
+  "urlFetchWhitelist": ["https://*.cloudfront.net/"],
+  "addOns": {
+    "common": {
+      "name": "Phishing Detector",
+      "logoUrl": "https://ssl.gstatic.com/docs/script/images/logo/script-64.png"
+    },
+    "gmail": {
+      "contextualTriggers": [
+        { "unconditional": {}, "onTriggerFunction": "onGmailMessageOpen" }
+      ]
+    }
+  }
+}
