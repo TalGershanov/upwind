@@ -76,11 +76,14 @@ resource "aws_autoscaling_group" "app" {
   health_check_type         = "ELB"
   health_check_grace_period = 600 # dnf + pip + create_schema can take several minutes on a t3.micro
 
-  # Group metrics (1-minute) so the dashboard can show instances in service.
+  # Group metrics (1-minute) so the dashboard can show instances in service, and
+  # launches/terminations (Pending/Terminating spike when instances are replaced in a loop).
   enabled_metrics = [
     "GroupInServiceInstances",
     "GroupDesiredCapacity",
     "GroupTotalInstances",
+    "GroupPendingInstances",
+    "GroupTerminatingInstances",
   ]
   metrics_granularity = "1Minute"
 

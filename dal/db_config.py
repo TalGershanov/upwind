@@ -8,8 +8,9 @@ opens a new connection, so a rotated password is picked up without a
 restart. There is deliberately no ``DATABASE_URL`` override, and the
 password never sits in an environment variable.
 
-boto3 takes the region from ``AWS_REGION`` and its credentials from the
-instance role.
+The Secrets Manager region is passed to boto3 explicitly (boto3 itself does
+not read ``AWS_REGION``): ``AWS_REGION`` if set, else the region in the secret
+ARN. Credentials come from the instance role.
 """
 
 import json
@@ -40,6 +41,18 @@ def _read_env(env: Mapping[str, str]) -> dict:
     return values
 
 
+def _region(env: Mapping[str, str], arn: str) -> str:
+    """``AWS_REGION`` if set, else the region field of the secret ARN."""
+    region = (env.get('AWS_REGION') or '').strip()
+    if region:
+        return region
+    # arn:aws:secretsmanager:<region>:<account>:secret:<name>
+    parts = arn.split(':')
+    if len(parts) > 3 and parts[3]:
+        return parts[3]
+    raise DBConfigError('no AWS region: set AWS_REGION or use a full secret ARN')
+
+
 def read_credentials(client: Any, arn: str) -> tuple:
     """Return ``(username, password)`` from the secret ``arn``."""
     try:
@@ -59,17 +72,19 @@ def create_history_store(env: Optional[Mapping[str, str]] = None,
     Raises:
         DBConfigError: if an environment variable is missing or invalid.
     """
-    values = _read_env(os.environ if env is None else env)
+    env_source = os.environ if env is None else env
+    values = _read_env(env_source)
     try:
         port = int(values['DB_PORT'])
     except ValueError:
         raise DBConfigError('DB_PORT must be an integer') from None
+    arn = values['DB_SECRET_ARN']
     client = secrets_client or boto3.client(
-        'secretsmanager', config=Config(
+        'secretsmanager', region_name=_region(env_source, arn),
+        config=Config(
             connect_timeout=SECRETS_TIMEOUT_SECONDS,
             read_timeout=SECRETS_TIMEOUT_SECONDS,
             retries={'max_attempts': 2}))
-    arn = values['DB_SECRET_ARN']
     url = URL.create(DRIVER, host=values['DB_HOST'], port=port,
                      database=values['DB_NAME'],
                      query={'sslmode': 'require'})
