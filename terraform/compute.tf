@@ -74,7 +74,7 @@ resource "aws_autoscaling_group" "app" {
 
   # ELB health check: an instance that fails /health is replaced.
   health_check_type         = "ELB"
-  health_check_grace_period = 600 # dnf + pip + init_db can take several minutes on a t3.micro
+  health_check_grace_period = 600 # dnf + pip + create_schema can take several minutes on a t3.micro
 
   # Group metrics (1-minute) so the dashboard can show instances in service.
   enabled_metrics = [

@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Security Groups = firewalls. Tiered: internet -> ALB -> EC2 -> RDS / cache.
+# Security Groups = firewalls. Tiered: internet -> ALB -> EC2 -> RDS.
 # Each tier accepts traffic ONLY from the tier above it.
 # (Terraform removes AWS's default "allow all outbound" rule, so a group
 # has no outbound access unless a rule below grants it.)
@@ -24,13 +24,6 @@ resource "aws_security_group" "db" {
   description = "RDS PostgreSQL: traffic from the app servers only"
   vpc_id      = aws_vpc.main.id
   tags        = { Name = "${var.project_name}-db-sg" }
-}
-
-resource "aws_security_group" "cache" {
-  name        = "${var.project_name}-cache-sg"
-  description = "ElastiCache: traffic from the app servers only"
-  vpc_id      = aws_vpc.main.id
-  tags        = { Name = "${var.project_name}-cache-sg" }
 }
 
 resource "aws_security_group" "vpc_endpoints" {
@@ -104,15 +97,6 @@ resource "aws_vpc_security_group_egress_rule" "app_to_db" {
   to_port                      = 5432
 }
 
-resource "aws_vpc_security_group_egress_rule" "app_to_cache" {
-  security_group_id            = aws_security_group.app.id
-  description                  = "Valkey/Redis to ElastiCache (6379 primary, 6380 replica reads)"
-  referenced_security_group_id = aws_security_group.cache.id
-  ip_protocol                  = "tcp"
-  from_port                    = 6379
-  to_port                      = 6380
-}
-
 # --- RDS ---------------------------------------------------------------------
 
 resource "aws_vpc_security_group_ingress_rule" "db_from_app" {
@@ -122,15 +106,4 @@ resource "aws_vpc_security_group_ingress_rule" "db_from_app" {
   ip_protocol                  = "tcp"
   from_port                    = 5432
   to_port                      = 5432
-}
-
-# --- ElastiCache -------------------------------------------------------------
-
-resource "aws_vpc_security_group_ingress_rule" "cache_from_app" {
-  security_group_id            = aws_security_group.cache.id
-  description                  = "Valkey/Redis from the app servers only"
-  referenced_security_group_id = aws_security_group.app.id
-  ip_protocol                  = "tcp"
-  from_port                    = 6379
-  to_port                      = 6380
 }
