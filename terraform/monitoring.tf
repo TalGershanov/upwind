@@ -71,6 +71,97 @@ resource "aws_cloudwatch_log_metric_filter" "rejected" {
   }
 }
 
+# ---------- ASG events (instance refreshes, launches, terminations) ----------
+# Refresh status (Started / Succeeded / Failed / Cancelled) and every instance launch/terminate are
+# not CloudWatch metrics, only EventBridge events. Rule -> log group, then metric filters count
+# them for the dashboard. The per-minute Pending/Terminating group metrics miss short-lived states.
+resource "aws_cloudwatch_log_group" "asg_events" {
+  name              = "/aws/events/${var.project_name}-asg-events"
+  retention_in_days = 14
+}
+
+# Lets EventBridge write to the log group above.
+data "aws_iam_policy_document" "events_to_logs" {
+  statement {
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.asg_events.arn}:*"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com", "delivery.logs.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_cloudwatch_log_resource_policy" "events_to_logs" {
+  policy_name     = "${var.project_name}-events-to-logs"
+  policy_document = data.aws_iam_policy_document.events_to_logs.json
+}
+
+resource "aws_cloudwatch_event_rule" "asg_events" {
+  name        = "${var.project_name}-asg-events"
+  description = "Instance refresh, launch and terminate events for the app ASG"
+  event_pattern = jsonencode({
+    source = ["aws.autoscaling"]
+    "detail-type" = [
+      { prefix = "EC2 Auto Scaling Instance Refresh" },
+      { prefix = "EC2 Instance Launch" },
+      { prefix = "EC2 Instance Terminate" },
+    ]
+    detail = { AutoScalingGroupName = [local.asg] }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "asg_events_logs" {
+  rule = aws_cloudwatch_event_rule.asg_events.name
+  arn  = aws_cloudwatch_log_group.asg_events.arn
+
+  depends_on = [aws_cloudwatch_log_resource_policy.events_to_logs]
+}
+
+# detail-type is "EC2 Auto Scaling Instance Refresh Failed".
+resource "aws_cloudwatch_log_metric_filter" "refresh_failed" {
+  name           = "instance-refresh-failed"
+  log_group_name = aws_cloudwatch_log_group.asg_events.name
+  pattern        = "\"Instance Refresh Failed\""
+
+  metric_transformation {
+    name          = "InstanceRefreshFailed"
+    namespace     = "PhishingDetector"
+    value         = "1"
+    default_value = 0
+  }
+}
+
+# detail-type is "EC2 Instance Terminate Successful": one per replaced/removed instance
+# (planned refreshes count too).
+resource "aws_cloudwatch_log_metric_filter" "instance_terminated" {
+  name           = "instance-terminated"
+  log_group_name = aws_cloudwatch_log_group.asg_events.name
+  pattern        = "\"Instance Terminate Successful\""
+
+  metric_transformation {
+    name          = "InstancesTerminated"
+    namespace     = "PhishingDetector"
+    value         = "1"
+    default_value = 0
+  }
+}
+
+# detail-type is "EC2 Instance Launch Unsuccessful".
+resource "aws_cloudwatch_log_metric_filter" "launch_failed" {
+  name           = "instance-launch-failed"
+  log_group_name = aws_cloudwatch_log_group.asg_events.name
+  pattern        = "\"Instance Launch Unsuccessful\""
+
+  metric_transformation {
+    name          = "InstanceLaunchFailed"
+    namespace     = "PhishingDetector"
+    value         = "1"
+    default_value = 0
+  }
+}
+
 # ---------- Email alerts ----------
 # The subscription stays "Pending confirmation" until the link in the AWS email is clicked.
 resource "aws_sns_topic" "alerts" {
@@ -377,24 +468,45 @@ locals {
 
     # --- Logs ---
     {
-      type = "log", x = 0, y = 38, width = 12, height = 10
+      type = "log", x = 0, y = 44, width = 12, height = 10
       properties = {
         title = "Latest 50 app log lines", view = "table", region = local.region
         query = "SOURCE '${aws_cloudwatch_log_group.app.name}' | fields @timestamp, @logStream, @message | sort @timestamp desc | limit 50"
       }
     },
     {
-      type = "log", x = 12, y = 38, width = 12, height = 10
+      type = "log", x = 12, y = 44, width = 12, height = 10
       properties = {
         title = "Analyses per instance (5 min)", view = "timeSeries", region = local.region
         query = "SOURCE '${aws_cloudwatch_log_group.app.name}' | filter @message like /Analysis message_id/ | stats count(*) as analyses by bin(5m), @logStream"
       }
     },
     {
-      type = "log", x = 0, y = 48, width = 24, height = 6
+      type = "log", x = 0, y = 54, width = 24, height = 6
       properties = {
         title = "Recent 4XX/5XX requests", view = "table", region = local.region
         query = "SOURCE '${aws_cloudwatch_log_group.access.name}' | filter @message like /\" [45]\\d\\d/ | fields @timestamp, @logStream, @message | sort @timestamp desc | limit 20"
+      }
+    },
+
+    # --- Deployments: instance launches/terminations and refresh events (from the ASG events log) ---
+    {
+      type = "metric", x = 0, y = 38, width = 12, height = 6
+      properties = {
+        title = "ASG churn (terminations and failures)", view = "timeSeries", region = local.region, period = 60
+        metrics = [
+          ["AWS/AutoScaling", "GroupInServiceInstances", "AutoScalingGroupName", local.asg, { stat = "Average", label = "In service" }],
+          ["PhishingDetector", "InstancesTerminated", { stat = "Sum", label = "Instances terminated" }],
+          ["PhishingDetector", "InstanceLaunchFailed", { stat = "Sum", label = "Launch failed" }],
+          ["PhishingDetector", "InstanceRefreshFailed", { stat = "Sum", label = "Refresh failed" }],
+        ]
+      }
+    },
+    {
+      type = "log", x = 12, y = 38, width = 12, height = 6
+      properties = {
+        title = "ASG events (launches, terminations, refreshes)", view = "table", region = local.region
+        query = "SOURCE '${aws_cloudwatch_log_group.asg_events.name}' | fields @timestamp, `detail-type`, detail.EC2InstanceId, detail.Cause, @message | sort @timestamp desc | limit 20"
       }
     },
   ]
