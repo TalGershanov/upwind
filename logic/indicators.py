@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Optional
 from urllib.parse import urlsplit
+from rapidfuzz.distance import Levenshtein
 
 import eml_parser.decode
 import eml_parser.regexes
@@ -20,7 +21,7 @@ import eml_parser.regexes
 from dal.history_store import HistoryStore
 from logic import config, email_parser
 from logic.attachments import scan_attachment
-from logic.domains import (edit_distance, is_internationalized, is_ip,
+from logic.domains import (is_internationalized, is_ip,
                            legit_index, normalize_domain, registered_domain,
                            split_host)
 from logic.scoring import risk_score
@@ -248,7 +249,7 @@ def _is_lookalike(brand: str, parts: set) -> bool:
     limit = config.SPOOF_MAX_EDIT_DISTANCE
     return len(brand) >= config.SPOOF_MIN_FUZZY_LEN and any(
         abs(len(part) - len(brand)) <= limit
-        and 1 <= edit_distance(part, brand) <= limit for part in parts)
+        and 1 <= Levenshtein.distance(part, brand, score_cutoff=limit + 1) <= limit for part in parts)
 
 
 @indicator('Spoofed sender', weight=0.25)

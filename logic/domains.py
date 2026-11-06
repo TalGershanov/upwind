@@ -57,18 +57,6 @@ def is_internationalized(host: str) -> bool:
         label.startswith('xn--') for label in host.split('.'))
 
 
-def edit_distance(a: str, b: str) -> int:
-    """Levenshtein distance."""
-    previous = list(range(len(b) + 1))
-    for i, char_a in enumerate(a, 1):
-        current = [i]
-        for j, char_b in enumerate(b, 1):
-            current.append(min(previous[j] + 1, current[j - 1] + 1,
-                               previous[j - 1] + (char_a != char_b)))
-        previous = current
-    return previous[-1]
-
-
 @functools.cache
 def legit_index() -> tuple:
     """``(registered legit domains, {brand label: {domains}})``.
