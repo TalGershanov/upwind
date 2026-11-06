@@ -88,7 +88,7 @@ Only new code is needed, in `logic/indicators.py`:
 2. Decorate it with `@indicator('Name', weight=...)`. Weights are relative.
 3. Return `IndicatorResult(score, reasons, details)` with a score from `config` (1–4).
 
-The registry, scoring, report, UI and Gmail card pick it up. Word and domain lists go in `logic/config.py`.
+
 
 ---
 
