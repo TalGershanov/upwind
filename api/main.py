@@ -12,8 +12,8 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from dal.db_config import create_history_store
 from logic.email_parser import EmailParseError, parse_email
-from logic.indicators import Indicators
-from logic.logging_config import setup_logging
+from logging_config import setup_logging
+from logic.indicators import analyze as analyze_email
 
 logger = logging.getLogger(__name__)
 MAX_BYTES = 5 * 1024 * 1024
@@ -70,7 +70,7 @@ async def analyze(file: UploadFile):
     store = app.state.store
     try:
         return await run_in_threadpool(
-            lambda: Indicators(parse_email(data), store).analyze())
+            lambda: analyze_email(parse_email(data), store))
     except EmailParseError:
         raise HTTPException(400, 'Could not parse email') from None
 

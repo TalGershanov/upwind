@@ -31,7 +31,7 @@ resource "aws_s3_bucket_versioning" "artifacts" {
   }
 }
 
-# --- The app zip: ONLY api/, dal/, logic/ and requirements.txt ----------------
+# --- The app zip: ONLY api/, dal/, logic/, logging_config.py and requirements.txt ----------------
 # archive_file can't zip several folders at once, so we list the files ourselves.
 # "**" takes every file (including api/static/index.html); __pycache__ and
 # macOS .DS_Store files are skipped.
@@ -40,7 +40,7 @@ locals {
   repo_root = "${path.module}/.."
   app_files = setunion(
     [for f in fileset(local.repo_root, "{api,dal,logic}/**") : f if !strcontains(f, "__pycache__") && !endswith(f, ".DS_Store")],
-    ["requirements.txt"],
+    ["requirements.txt", "logging_config.py"],
   )
 }
 

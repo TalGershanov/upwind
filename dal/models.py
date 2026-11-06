@@ -25,13 +25,16 @@ class Reputation(Base):
     phishing_count = Column(Integer, nullable=False, default=0)
 
 
-class Blocklist(Base):
-    """A blocklisted domain, IP or attachment hash."""
+class BlockedDomain(Base):
+    """A blocklisted sender domain and the report that got it listed.
 
-    __tablename__ = 'blocklist'
+    (The older ``blocklist`` table, keyed by kind and value, is no longer
+    used; a new name lets ``create_all`` add this one on a live database.)
+    """
 
-    kind = Column(String, primary_key=True)  # 'domain', 'ip' or 'hash'
-    value = Column(String, primary_key=True)
+    __tablename__ = 'blocked_domains'
+
+    domain = Column(String, primary_key=True)
     added_at = Column(DateTime(timezone=True), nullable=False,
                       default=_utcnow)
     report = Column(JSON().with_variant(JSONB(), 'postgresql'),

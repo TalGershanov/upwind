@@ -38,10 +38,6 @@ output "db_security_group_id" {
   value = aws_security_group.db.id
 }
 
-output "cache_security_group_id" {
-  value = aws_security_group.cache.id
-}
-
 output "app_url" {
   description = "Open this in a browser once the instances are healthy."
   value       = "https://${aws_cloudfront_distribution.app.domain_name}"

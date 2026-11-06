@@ -8,13 +8,6 @@ PROBABLY_PHISHING = 3
 PROBABLY_NOT_PHISHING = 2
 NOT_PHISHING = 1
 
-# LOGGING
-LOG_LEVEL = os.environ.get('PHISHING_LOG_LEVEL', 'INFO')
-LOG_FILE = os.environ.get('PHISHING_LOG_FILE', 'logs/phishing.log')
-LOG_MAX_BYTES = 5_000_000  # per file
-LOG_BACKUP_COUNT = 3  # total on disk: 5 MB x (3 + 1) = 20 MB max
-LOG_MAX_MESSAGE_CHARS = 1000
-
 VERDICT_NAMES = {
     BLOCKLIST: 'BLOCKLIST',
     PHISHING: 'PHISHING',
@@ -24,15 +17,7 @@ VERDICT_NAMES = {
 }
 
 # RISK SCORING
-# Weight per registered indicator, by severity. Must add up to 1.
-INDICATOR_WEIGHTS = {
-    'Sender Authentication': 0.20,
-    'Spoofed sender': 0.25,
-    'Suspicious links': 0.20,
-    'Attachment analysis': 0.20,
-    'Suspicious wording': 0.10,
-    'Sender history': 0.05,
-}
+# Each indicator's weight is set where it is defined (@indicator).
 # (upper bound of the weighted score, verdict); the last one is open.
 VERDICT_THRESHOLDS = (
     (1.75, NOT_PHISHING),
@@ -51,10 +36,16 @@ TRUSTED_AUTHSERV_IDS = frozenset(
 
 # SENDER HISTORY
 ALLOWLIST_MIN_LEGIT = 3  # authenticated legit messages to be allowlisted
+# A sender domain (not a known-legit one) is blocklisted once it has this
+# many phishing messages, and more of them than legit ones.
+BLOCKLIST_MIN_PHISHING = 3
+
+# REPORT (how much of what was found is returned)
+REPORT_LIMIT = 10  # flagged URLs / attachments / brands listed
+REPORT_CHARS = 200  # characters kept of a reported URL or file name
 
 # SUSPICIOUS LINKS
 MAX_URLS_ANALYZED = 500
-MAX_REPORTED_URLS = 10
 MAX_SUBDOMAINS = 3
 URL_SHORTENERS = frozenset("""
     bit.ly tinyurl.com t.co goo.gl ow.ly is.gd cutt.ly rebrand.ly
@@ -68,11 +59,11 @@ CHEAP_TLDS = frozenset("""
 """.split())
 
 # SPOOFED SENDER
-SPOOF_MIN_BRAND_LEN = 4  # shorter brands only match as a whole token
-SPOOF_SHORT_LABEL = 5  # labels up to this length allow 1 edit
-SPOOF_MAX_EDIT_DISTANCE = 2  # longer labels allow this many edits
-SPOOF_MIN_LOOKALIKE_LEN = 6  # shorter brands get no edit-distance match
-# Well-known domains; the history store adds the ones seen to be legit.
+SPOOF_MIN_BRAND_LEN = 4  # shorter brands are not matched in the display name
+SPOOF_MIN_PREFIX_LEN = 5  # shorter brands only match as a whole token
+SPOOF_MIN_FUZZY_LEN = 6  # look-alike (edit distance) needs a brand this long
+SPOOF_MAX_EDIT_DISTANCE = 2  # look-alike: this many edits from the brand
+# Well-known brand domains; Tranco's popular domains count as legit too.
 LEGIT_DOMAINS_SEED = frozenset("""
     google.com gmail.com paypal.com microsoft.com outlook.com hotmail.com
     apple.com icloud.com amazon.com facebook.com instagram.com netflix.com
@@ -126,19 +117,21 @@ SUSPICIOUS_PHRASES = {
 
 # ATTACHMENTS
 MACRO_EXTENSIONS = frozenset(['docm', 'xlsm', 'pptm', 'dotm', 'xlsb'])
-# A declared type from this set must match the type of the extension
-# (e.g. invoice.pdf declared as an executable is a mismatch).
-RISKY_MIME_TYPES = frozenset("""
-    application/x-msdownload application/x-msdos-program
-    application/x-dosexec application/vnd.microsoft.portable-executable
-    application/x-executable application/java-archive application/x-sh
-    application/javascript text/javascript application/hta text/html
-    application/zip application/x-zip-compressed
-    application/x-rar-compressed application/vnd.rar
-    application/x-7z-compressed
-""".split())
-# A zip is opened only below this size, and only its metadata is read.
-MAX_ZIP_INSPECT_BYTES = 5 * 1024 * 1024
+# A declared type listed here must belong to the same family as the type
+# of the file extension (invoice.pdf declared as an executable is a
+# mismatch; x-zip-compressed and zip are the same family).
+MIME_FAMILIES = {
+    'application/x-msdownload': 'exe', 'application/x-msdos-program': 'exe',
+    'application/x-dosexec': 'exe', 'application/x-executable': 'exe',
+    'application/vnd.microsoft.portable-executable': 'exe',
+    'application/java-archive': 'jar', 'application/x-sh': 'sh',
+    'application/hta': 'hta', 'text/html': 'html',
+    'application/javascript': 'js', 'text/javascript': 'js',
+    'application/zip': 'zip', 'application/x-zip-compressed': 'zip',
+    'application/x-rar-compressed': 'rar', 'application/vnd.rar': 'rar',
+    'application/x-7z-compressed': '7z',
+}
+# A zip is never decompressed: only its metadata is read.
 MAX_ZIP_ENTRIES = 1000
 MAX_ZIP_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # declared sizes, summed
 MAX_ZIP_RATIO = 200  # declared size / compressed size, per entry
